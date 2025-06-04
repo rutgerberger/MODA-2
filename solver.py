@@ -1,22 +1,23 @@
 import numpy as np
 from pymoo.core.problem import Problem
-from pymoo.algorithms.soo.nonconvex.ga import GA
+from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.operators.crossover.binx import BinomialCrossover
 from pymoo.operators.mutation.bitflip import BitflipMutation
 from pymoo.operators.sampling.rnd import BinaryRandomSampling
 from pymoo.optimize import minimize
 from pymoo.core.variable import Binary # For defining variable types
+import matplotlib.pyplot as plt
 
 class ContainerLoadingProblem(Problem):
 
-    def __init__(self, bays, rows, tiers, containers, delta_w=0):
+    def __init__(self, bays, rows, tiers, containers, container_weights, delta_w=0):
         # Store problem parameters
         self.bays = bays
         self.rows = rows
         self.tiers = tiers
         self.containers = containers
+        self.container_weights = container_weights
         self.delta_w = delta_w
-        self.destinations = []
 
         self.num_bays = len(bays)
         self.num_rows = len(rows)
@@ -32,7 +33,6 @@ class ContainerLoadingProblem(Problem):
                     for c_idx, c in enumerate(containers):
                         self.x_flat_indices[(b,r,t,c)] = idx_counter
                         idx_counter += 1
-        #print(self.x_flat_indices)
 
         self.num_x_vars = idx_counter
 
@@ -57,7 +57,7 @@ class ContainerLoadingProblem(Problem):
         n_var = self.num_x_vars + self.num_o_vars
 
         # Define the number of objectives (e.g., maximize containers loaded, minimize imbalance)
-        n_obj = 1
+        n_obj = 3
 
         # Define the number of constraints
         num_constr1 = self.num_containers * (self.num_containers - 1)
@@ -90,15 +90,32 @@ class ContainerLoadingProblem(Problem):
             # Objective function 1
             # Maximize the number of containers loaded (=minimize the negative count)
             num_containers_loaded = 0
+            # Variables for new objectives
+            longitudinal_weighted_sum = 0
+            latitudinal_weighted_sum = 0
+
             for container_id in self.containers:
-                container_x_vars = []
+                container_is_loaded = False
                 for b in self.bays:
                     for r in self.rows:
                         for t in self.tiers:
-                            container_x_vars.append(x_sol[self.x_flat_indices[(b,r,t,container_id)]])
-                if np.sum(container_x_vars) > 0: # if the container is placed at some place
+                            x_val = x_sol[self.x_flat_indices[(b,r,t,container_id)]]
+                            if x_val > 0.5: # If container_id is placed at (b,r,t)
+                                container_is_loaded = True
+                                # Add to longitudinal and latitudinal sums
+                                weight = self.container_weights[container_id]
+                                longitudinal_weighted_sum += weight * (b - 4.5)
+                                latitudinal_weighted_sum += weight * (r - 2.5)
+                if container_is_loaded:
                     num_containers_loaded += 1
-            obj_values.append(-num_containers_loaded) # Minimize the negative count
+            
+            # Objective 1: Minimize negative number of containers loaded
+            obj_f1 = -num_containers_loaded
+            # Objective 2: Minimize longitudinal disbalance
+            obj_f2 = abs(longitudinal_weighted_sum)
+            # Objective 3: Minimize latitudinal disbalance
+            obj_f3 = abs(latitudinal_weighted_sum)
+            obj_values.append([obj_f1, obj_f2, obj_f3]) # Append all three objectives
 
             # --- Constraints ---
             # Current constraints array keeps track of how many
@@ -182,6 +199,21 @@ class ContainerLoadingProblem(Problem):
 
             constraint_violations.append(current_constraints)
 
+            # 7. Weight constraint
+            if self.delta_w > 0:
+                for b in self.bays:
+                    for r in self.rows:
+                        for t_idx, t in enumerate(self.tiers):
+                            if t > min(self.tiers):
+                                for i in self.containers:
+                                    for j in self.containers:
+                                        if i != j:
+                                            if (self.container_weights[i] - self.container_weights[j]) > self.delta_w:
+                                                x_i_val = x_sol[self.x_flat_indices[(b,r,t,i)]]
+                                                x_j_val = x_sol[self.x_flat_indices[(b,r,t-1,j)]]
+                                                # If x_i_val is 1 and x_j_val is 1, this configuration is invalid
+                                                current_constraints.append(x_i_val + x_j_val - 1) # Should be <= 1 (so (sum - 1) <= 0)
+
 
 
         out["F"] = np.array(obj_values, dtype=float)
@@ -193,13 +225,13 @@ if __name__ == "__main__":
     rows = [1, 2] # Two rows
     tiers = [1, 2, 3] # Three tiers
     containers = ['C1', 'C2', 'C3', 'C4'] # Four containers
+    container_weights = {'C1': 10, 'C2': 12, 'C3': 8, 'C4': 15}
 
     # Create the problem instance
-    problem = ContainerLoadingProblem(bays, rows, tiers, containers)
+    problem = ContainerLoadingProblem(bays, rows, tiers, containers, container_weights)
 
     # --- Define the algorithm ---
-    # For binary problems, you often need specific operators
-    algorithm = GA(
+    algorithm = NSGA2(
         pop_size=100, # Population size
         sampling=BinaryRandomSampling(), # Initial random binary population
         crossover=BinomialCrossover(), # Crossover for binary variables
@@ -220,48 +252,92 @@ if __name__ == "__main__":
 
     print(f"\nOptimization finished with status: {res.message}")
 
-    if res.X is not None:
-        best_x_sol = res.X[:problem.num_x_vars]
-        best_o_sol = res.X[problem.num_x_vars:]
+if res.X is not None:
+    print("\n--- Pareto Front Solutions Found ---")
+    print(f"Number of non-dominated solutions found: {len(res.X)}")
 
-        print("\n--- Best Solution Found ---")
+    # Print details for all solutions on the Pareto front
+    for sol_idx in range(len(res.X)):
+        current_x_sol = res.X[sol_idx, :problem.num_x_vars]
+        current_o_sol = res.X[sol_idx, problem.num_x_vars:]
+        current_f_vals = res.F[sol_idx]
+        current_g_vals = res.G[sol_idx] # Constraints for this solution
 
-        # Reconstruct container placement
-        print("\nContainer Placement (x variables):")
-        containers_placed = 0
-        for b in bays:
-            for r in rows:
-                for t in tiers:
-                    for c in containers:
-                        flat_idx = problem.x_flat_indices[(b,r,t,c)]
-                        if best_x_sol[flat_idx] > 0.5: # Consider 0.5 as threshold for binary
-                            print(f"  Container {c} at Bay {b}, Row {r}, Tier {t}")
-                            containers_placed += 1
-        print(f"\nTotal containers loaded: {containers_placed}")
+        print(f"\n--- Solution {sol_idx + 1} ---")
+        print(f"  Objective Values: (Loaded Containers: {-current_f_vals[0]:.0f}, "
+              f"Longitudinal Disbalance: {current_f_vals[1]:.2f}, "
+              f"Latitudinal Disbalance: {current_f_vals[2]:.2f})")
 
-        # Reconstruct o_i_j relationships
-        print("\nOn-Top Of Relationships (o variables):")
-        for i in containers:
-            for j in containers:
-                if i != j:
-                    flat_idx = problem.o_flat_indices[(i,j)]
-                    if best_o_sol[flat_idx] > 0.5:
-                        print(f"  Container {i} is on top of Container {j}")
+        # Check feasibility for this specific solution
+        total_violations = np.sum(np.maximum(0, current_g_vals))
+        if total_violations < 1e-6:
+            print("  Status: Feasible")
+        else:
+            print(f"  Status: NOT Feasible (Total Violation: {total_violations:.4f})")
+            # Optional: print individual violations for debugging
+            # for i, viol in enumerate(current_g_vals):
+            #     if viol > 1e-6:
+            #         print(f"    Constraint {i}: {viol:.4f}")
 
-        # Check constraint violations
-        print("\nConstraint Violations (G values):")
-        G_val = res.G
-        if G_val is not None:
-            # G values are the raw constraint violations. If any are > 0, the solution is infeasible.
-            # In pymoo, a solution is considered feasible if all G values are <= 0.
-            total_violations = np.sum(np.maximum(0, G_val)) # Sum of only positive violations
-            print(f"Total constraint violation: {total_violations}")
-            if total_violations < 1e-6: # Using a small tolerance for floating point comparisons
-                print("The best found solution is feasible.")
-            else:
-                print("The best found solution is NOT fully feasible.")
-                # You might want to print individual violations for debugging
-                # print(G_val)
+        # You can also choose to print detailed placement for each solution,
+        # but for a large number of solutions, this might be too verbose.
+        # It's often better to visualize.
 
-    else:
-        print("No solution found.")
+        # Example: Print placed containers for each solution
+        # containers_placed_current = 0
+        # print("  Container Placements:")
+        # for b in bays:
+        #     for r in rows:
+        #         for t in tiers:
+        #             for c in containers:
+        #                 flat_idx = problem.x_flat_indices[(b,r,t,c)]
+        #                 if current_x_sol[flat_idx] > 0.5:
+        #                     print(f"    Container {c} at Bay {b}, Row {r}, Tier {t}")
+        #                     containers_placed_current += 1
+        # print(f"  Total containers loaded for this solution: {containers_placed_current}")
+
+
+    # --- Visualization (Highly Recommended!) ---
+    # This is the best way to "capture" and understand the trade-offs.
+    # You'll need matplotlib for this.
+    import matplotlib.pyplot as plt
+
+    # Extract objective values
+    f_loaded = -res.F[:, 0] # Convert back to positive loaded containers
+    f_long = res.F[:, 1]
+    f_lat = res.F[:, 2]
+
+    # For 3 objectives, a 3D scatter plot is useful
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(f_loaded, f_long, f_lat, c='blue', marker='o')
+
+    ax.set_xlabel('Loaded Containers (Maximize)')
+    ax.set_ylabel('Longitudinal Disbalance (Minimize)')
+    ax.set_zlabel('Latitudinal Disbalance (Minimize)')
+    ax.set_title('Pareto Front for Container Loading')
+    plt.grid(True)
+    plt.show()
+
+    # You might also want to plot 2D projections
+    plt.figure(figsize=(12, 5))
+
+    plt.subplot(1, 2, 1)
+    plt.scatter(f_loaded, f_long, c='red')
+    plt.xlabel('Loaded Containers')
+    plt.ylabel('Longitudinal Disbalance')
+    plt.title('Loaded vs. Longitudinal')
+    plt.grid(True)
+
+    plt.subplot(1, 2, 2)
+    plt.scatter(f_loaded, f_lat, c='green')
+    plt.xlabel('Loaded Containers')
+    plt.ylabel('Latitudinal Disbalance')
+    plt.title('Loaded vs. Latitudinal')
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+else:
+    print("No solution found.")
