@@ -5,7 +5,7 @@ from pymoo.operators.crossover.binx import BinomialCrossover
 from pymoo.operators.mutation.bitflip import BitflipMutation
 from pymoo.operators.sampling.rnd import BinaryRandomSampling
 from pymoo.optimize import minimize
-from pymoo.core.variable import Binary # For defining variable types
+from pymoo.core.variable import Binary
 import matplotlib.pyplot as plt
 
 class ContainerLoadingProblem(Problem):
@@ -47,11 +47,7 @@ class ContainerLoadingProblem(Problem):
                     self.o_flat_indices[(i,j)] = o_idx_counter # Use the new counter
                     o_idx_counter += 1
 
-        """
-        o_i_j is defined for i != j.
-        If we have N_C containers, then for each i, there are (N_C - 1) possible j values.
-        So, the total number of o_i_j variables should be N_C * (N_C - 1).
-        """
+
         self.num_o_vars = o_idx_counter # This holds the count of o variables
 
         n_var = self.num_x_vars + self.num_o_vars
@@ -72,7 +68,7 @@ class ContainerLoadingProblem(Problem):
 
         xl = np.zeros(n_var)
         xu = np.ones(n_var)
-        breakpoint()
+
         super().__init__(n_var=n_var, n_obj=n_obj, n_constr=n_constr, xl=xl, xu=xu, type_var=Binary)
 
     def _evaluate(self, X, out, *args, **kwargs):
@@ -220,12 +216,12 @@ class ContainerLoadingProblem(Problem):
         out["G"] = np.array(constraint_violations, dtype=float)
 
 if __name__ == "__main__":
-    # Define your problem parameters
-    bays = [1, 2] # Two bays
+    # Define problem parameters
+    bays = [1, 2, 3] # Two bays
     rows = [1, 2] # Two rows
     tiers = [1, 2, 3] # Three tiers
-    containers = ['C1', 'C2', 'C3', 'C4'] # Four containers
-    container_weights = {'C1': 10, 'C2': 12, 'C3': 8, 'C4': 15}
+    containers = ['C' + str(i) for i in range(1, 7)]  # 6 containers
+    container_weights = {f'C{i}': np.random.randint(8, 16) for i in range(1, 7)}
 
     # Create the problem instance
     problem = ContainerLoadingProblem(bays, rows, tiers, containers, container_weights)
@@ -274,32 +270,9 @@ if res.X is not None:
             print("  Status: Feasible")
         else:
             print(f"  Status: NOT Feasible (Total Violation: {total_violations:.4f})")
-            # Optional: print individual violations for debugging
-            # for i, viol in enumerate(current_g_vals):
-            #     if viol > 1e-6:
-            #         print(f"    Constraint {i}: {viol:.4f}")
+            
 
-        # You can also choose to print detailed placement for each solution,
-        # but for a large number of solutions, this might be too verbose.
-        # It's often better to visualize.
-
-        # Example: Print placed containers for each solution
-        # containers_placed_current = 0
-        # print("  Container Placements:")
-        # for b in bays:
-        #     for r in rows:
-        #         for t in tiers:
-        #             for c in containers:
-        #                 flat_idx = problem.x_flat_indices[(b,r,t,c)]
-        #                 if current_x_sol[flat_idx] > 0.5:
-        #                     print(f"    Container {c} at Bay {b}, Row {r}, Tier {t}")
-        #                     containers_placed_current += 1
-        # print(f"  Total containers loaded for this solution: {containers_placed_current}")
-
-
-    # --- Visualization (Highly Recommended!) ---
-    # This is the best way to "capture" and understand the trade-offs.
-    # You'll need matplotlib for this.
+    # --- Visualization  ---
     import matplotlib.pyplot as plt
 
     # Extract objective values
@@ -319,7 +292,7 @@ if res.X is not None:
     plt.grid(True)
     plt.show()
 
-    # You might also want to plot 2D projections
+    # plot 2D projections
     plt.figure(figsize=(12, 5))
 
     plt.subplot(1, 2, 1)
